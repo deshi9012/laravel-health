@@ -149,3 +149,137 @@ it('returns 401 before applying the weight difference filter', function (): void
         'weight_kg' => 83.50,
     ]);
 });
+
+it('compares a historical measurement against the previous chronological record, not the latest overall', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-10 08:00:00', 92.00);
+    acceptedMeasurement('2026-09-18 08:00:00', 90.70);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 94.00,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    $this->assertDatabaseHas('body_measurements', [
+        'weight_kg' => 94.00,
+    ]);
+    expect(BodyMeasurement::query()->count())->toBe(4);
+});
+
+it('accepts the oldest historical measurement when no earlier record exists', function (): void {
+    acceptedMeasurement('2026-09-18 08:00:00', 90.70);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-08-01T08:00:00+03:00',
+        'weight_kg' => 100.00,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    $this->assertDatabaseHas('body_measurements', [
+        'weight_kg' => 100.00,
+    ]);
+});
+
+it('accepts a historical measurement within 3 kg of the previous chronological record', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 90.70);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 91.50,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    $this->assertDatabaseHas('body_measurements', [
+        'weight_kg' => 91.50,
+    ]);
+});
+
+it('returns 422 when a historical measurement differs by more than 3 kg from the previous chronological record', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 90.70);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 90.00,
+        'source' => 'home_assistant',
+    ])
+        ->assertUnprocessable()
+        ->assertExactJson([
+            'message' => 'Body measurement rejected because weight differs too much from the last accepted measurement.',
+            'difference_kg' => 4.50,
+        ]);
+
+    $this->assertDatabaseMissing('body_measurements', [
+        'weight_kg' => 90.00,
+    ]);
+    expect(BodyMeasurement::query()->count())->toBe(2);
+});
+
+it('compares a new live measurement against the latest earlier measurement', function (): void {
+    acceptedMeasurement('2026-09-18 08:00:00', 90.70);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-19T08:00:00+03:00',
+        'weight_kg' => 90.50,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    expect(BodyMeasurement::query()->count())->toBe(2);
+});
+
+it('does not let later records affect a historical comparison', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 80.00);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 94.00,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    expect(BodyMeasurement::query()->count())->toBe(3);
+});
+
+it('accepts a historical measurement with an exact 3.00 kg difference from the previous chronological record', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 80.00);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 91.50,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+});
+
+it('returns 422 when a historical measurement differs by 3.01 kg from the previous chronological record', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 80.00);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 91.49,
+        'source' => 'home_assistant',
+    ])
+        ->assertUnprocessable()
+        ->assertJsonPath('difference_kg', 3.01);
+
+    $this->assertDatabaseMissing('body_measurements', [
+        'weight_kg' => 91.49,
+    ]);
+});
+
+it('uses the highest id when previous measurements share the same measured_at', function (): void {
+    acceptedMeasurement('2026-08-30 08:00:00', 80.00);
+    acceptedMeasurement('2026-08-30 08:00:00', 94.50);
+    acceptedMeasurement('2026-09-18 08:00:00', 80.00);
+
+    postBodyMeasurement([
+        'measured_at' => '2026-09-01T08:00:00+03:00',
+        'weight_kg' => 94.00,
+        'source' => 'home_assistant',
+    ])->assertCreated();
+
+    expect(BodyMeasurement::query()->count())->toBe(4);
+});

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\BodyMeasurementRejectedException;
 use App\Models\BodyMeasurement;
+use Carbon\CarbonImmutable;
 
 class BodyMeasurementService
 {
@@ -33,7 +34,8 @@ class BodyMeasurementService
             return;
         }
 
-        $lastAccepted = $this->latest();
+        $incomingMeasuredAt = CarbonImmutable::parse($data['measured_at']);
+        $lastAccepted = $this->latestAcceptedBefore($incomingMeasuredAt);
 
         if ($lastAccepted === null || $lastAccepted->weight_kg === null) {
             return;
@@ -47,6 +49,15 @@ class BodyMeasurementService
         if (bccomp($difference, $maximum, 2) === 1) {
             throw new BodyMeasurementRejectedException($difference);
         }
+    }
+
+    private function latestAcceptedBefore(CarbonImmutable $incomingMeasuredAt): ?BodyMeasurement
+    {
+        return BodyMeasurement::query()
+            ->where('measured_at', '<', $incomingMeasuredAt)
+            ->orderByDesc('measured_at')
+            ->orderByDesc('id')
+            ->first();
     }
 
     private function decimalString(mixed $value): string
